@@ -7,15 +7,33 @@ import {
   Plus, Search, Settings, ShieldCheck, ShoppingBag, ShoppingCart, SlidersHorizontal,
   Sparkles, Sprout, Star, Truck, Users, Wallet, X, Zap,
 } from "lucide-react";
-import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { categories, farmCover, farmStats, orders, products, type Product } from "./data";
 
 const RevenueChart = lazy(() => import("./RevenueChart"));
 const ChartFallback = () => <div className="dash-panel chart-panel chart-loading">Loading your chart…</div>;
 type CartLine = { product: Product; quantity: number };
 type ToastMessage = { id: number; text: string };
+type UserRole = "farmer" | "buyer" | "delivery" | "admin";
+type AuthUser = { id: string; name: string; email: string; role: UserRole; verified: boolean; createdAt: string };
 const fmt = (value: number) => `RWF ${value.toLocaleString("en-RW")}`;
 const image = (url: string, alt: string, className = "") => <img className={className} src={url} alt={alt} loading="lazy" />;
+const workspaceFor = (role: UserRole) => ({ farmer: "/farmer", buyer: "/buyer", delivery: "/delivery", admin: "/admin" })[role];
+
+async function authRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (response.status === 204) return undefined as T;
+  const result = await response.json().catch(() => null) as { error?: string } | null;
+  if (!response.ok) throw new Error(result?.error || "The request could not be completed.");
+  return result as T;
+}
 
 function App() {
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -24,9 +42,26 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [profileMenu, setProfileMenu] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authFailure, setAuthFailure] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
   const cartCount = cart.reduce((sum, line) => sum + line.quantity, 0);
+
+  useEffect(() => {
+    let active = true;
+    authRequest<{ user: AuthUser }>("/api/auth/me")
+      .then(({ user: currentUser }) => { if (active) setUser(currentUser); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof Error && !error.message.includes("Please sign in")) {
+          setAuthFailure(error.message);
+        }
+      })
+      .finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   const notify = (text: string) => {
     const id = Date.now() + Math.random();
@@ -50,31 +85,63 @@ function App() {
   const updateQuantity = (id: string, delta: number) => setCart((items) => items
     .map((line) => line.product.id === id ? { ...line, quantity: line.quantity + delta } : line)
     .filter((line) => line.quantity > 0));
-  const shared = { cart, cartCount, wishlist, addToCart, toggleWishlist, updateQuantity, notify, setShowProductModal };
+  const signOut = async () => {
+    try {
+      await authRequest<void>("/api/auth/logout", { method: "POST" });
+      setUser(null);
+      setProfileMenu(false);
+      navigate("/");
+      notify("You have signed out.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not sign out. Please try again.");
+    }
+  };
+  const signIn = async (email: string, password: string) => {
+    const result = await authRequest<{ user: AuthUser }>("/api/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password }),
+    });
+    setUser(result.user);
+    navigate(workspaceFor(result.user.role), { replace: true });
+    notify(`Welcome back, ${result.user.name.split(" ")[0]}.`);
+  };
+  const register = async (payload: { name: string; email: string; password: string; role: UserRole }) => {
+    const result = await authRequest<{ user: AuthUser }>("/api/auth/register", {
+      method: "POST", body: JSON.stringify(payload),
+    });
+    setUser(result.user);
+    navigate(workspaceFor(result.user.role), { replace: true });
+    notify(`Your ${result.user.role} account is ready.`);
+  };
+  const shared = { cart, cartCount, wishlist, addToCart, toggleWishlist, updateQuantity, notify, setShowProductModal, user };
   const path = location.pathname;
-  const dashboardPath = ["/farmer", "/buyer", "/delivery", "/admin"].includes(path);
+  const dashboardPath = ["/farmer", "/buyer", "/delivery", "/admin", "/users"].includes(path);
+  const showDashboard = dashboardPath && Boolean(user);
 
   return (
     <div className="app min-h-screen">
-      {dashboardPath
-        ? <DashboardShell mobileNav={mobileNav} setMobileNav={setMobileNav} profileMenu={profileMenu} setProfileMenu={setProfileMenu} cartCount={cartCount} notify={notify} />
-        : <PublicHeader cartCount={cartCount} setMobileNav={setMobileNav} mobileNav={mobileNav} />}
+      {showDashboard
+        ? <DashboardShell user={user!} mobileNav={mobileNav} setMobileNav={setMobileNav} profileMenu={profileMenu} setProfileMenu={setProfileMenu} cartCount={cartCount} notify={notify} signOut={signOut} />
+        : <PublicHeader user={user} signOut={signOut} cartCount={cartCount} setMobileNav={setMobileNav} mobileNav={mobileNav} />}
       {mobileNav && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
-      <main className={dashboardPath ? "dashboard-main" : ""} onClick={() => profileMenu && setProfileMenu(false)}>
+      <main className={showDashboard ? "dashboard-main" : ""} onClick={() => profileMenu && setProfileMenu(false)}>
+        {authFailure && <div className="auth-server-error" role="alert">Account service unavailable: {authFailure}. Start the K&amp;M server and try again.</div>}
         <Routes>
           <Route path="/" element={<HomePage {...shared} />} />
           <Route path="/marketplace" element={<Marketplace {...shared} />} />
           <Route path="/product/:id" element={<ProductDetails {...shared} />} />
-          <Route path="/farmer" element={<FarmerDashboard {...shared} />} />
-          <Route path="/buyer" element={<BuyerDashboard {...shared} />} />
-          <Route path="/delivery" element={<DeliveryPage {...shared} />} />
-          <Route path="/checkout" element={<Checkout {...shared} />} />
+          <Route path="/signin" element={<AuthPage mode="signin" onSignIn={signIn} notify={notify} />} />
+          <Route path="/signup" element={<AuthPage mode="signup" onRegister={register} notify={notify} />} />
+          <Route path="/farmer" element={<ProtectedRoute user={user} loading={authLoading} role="farmer"><FarmerDashboard {...shared} /></ProtectedRoute>} />
+          <Route path="/buyer" element={<ProtectedRoute user={user} loading={authLoading} role="buyer"><BuyerDashboard {...shared} /></ProtectedRoute>} />
+          <Route path="/delivery" element={<ProtectedRoute user={user} loading={authLoading} role="delivery"><DeliveryPage {...shared} /></ProtectedRoute>} />
+          <Route path="/checkout" element={<ProtectedRoute user={user} loading={authLoading} role="buyer"><Checkout {...shared} /></ProtectedRoute>} />
           <Route path="/farms/:id" element={<FarmProfile {...shared} />} />
-          <Route path="/admin" element={<AdminDashboard {...shared} />} />
+          <Route path="/admin" element={<ProtectedRoute user={user} loading={authLoading} role="admin"><AdminDashboard {...shared} /></ProtectedRoute>} />
+          <Route path="/users" element={<ProtectedRoute user={user} loading={authLoading} role="admin"><AdminUsersPage notify={notify} /></ProtectedRoute>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
-      {!dashboardPath && <Footer />}
+      {!showDashboard && <Footer />}
       {showProductModal && <AddProductModal close={() => setShowProductModal(false)} notify={notify} />}
       <div className="toast-stack" aria-live="polite">
         {toasts.map((toast) => <div className="toast" key={toast.id}><Check size={16} />{toast.text}</div>)}
@@ -86,7 +153,71 @@ function App() {
   );
 }
 
-function PublicHeader({ cartCount, mobileNav, setMobileNav }: { cartCount: number; mobileNav: boolean; setMobileNav: (open: boolean) => void }) {
+function ProtectedRoute({ user, loading, role, children }: { user: AuthUser | null; loading: boolean; role: UserRole; children: ReactNode }) {
+  const location = useLocation();
+  if (loading) return <div className="auth-loading" role="status">Checking your account…</div>;
+  if (!user) return <Navigate to="/signin" replace state={{ from: location.pathname }} />;
+  if (user.role !== role) return <Navigate to={workspaceFor(user.role)} replace />;
+  return <>{children}</>;
+}
+
+function AuthPage({ mode, onSignIn, onRegister, notify }: {
+  mode: "signin" | "signup";
+  onSignIn?: (email: string, password: string) => Promise<void>;
+  onRegister?: (payload: { name: string; email: string; password: string; role: UserRole }) => Promise<void>;
+  notify: (text: string) => void;
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const requestedRole = new URLSearchParams(location.search).get("role");
+  const [role, setRole] = useState<UserRole>(requestedRole === "buyer" || requestedRole === "delivery" ? requestedRole : "farmer");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const signingUp = mode === "signup";
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      if (signingUp) await onRegister?.({ name, email, password, role });
+      else await onSignIn?.(email, password);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not complete the request.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const demoAccounts: { label: string; email: string; role: UserRole }[] = [
+    { label: "Farmer", email: "farmer@kandm.rw", role: "farmer" },
+    { label: "Buyer", email: "buyer@kandm.rw", role: "buyer" },
+    { label: "Delivery agent", email: "delivery@kandm.rw", role: "delivery" },
+    { label: "Administrator", email: "admin@kandm.rw", role: "admin" },
+  ];
+
+  return <div className="auth-page">
+    <div className="auth-visual"><div className="auth-visual-photo">{image(farmCover, "Rwandan farm at sunrise")}</div><div className="auth-visual-shade" /><Link to="/" className="brand auth-brand"><span className="brand-mark"><Sprout size={22} /></span><span>K<span>&amp;M</span><small>FARM · MARKET · GROW</small></span></Link><div className="auth-visual-copy"><span className="eyebrow eyebrow-light">RWANDA'S FARM-TO-MARKET COMMUNITY</span><h1>{signingUp ? <>Good things grow<br />when we <em>connect.</em></> : <>Welcome to a<br /><em>better market.</em></>}</h1><p>Meet the people behind your food. Sell, shop, and manage your poultry business with K&amp;M.</p><div className="auth-community"><div className="avatar-stack"><span>AU</span><span>JM</span><span>EN</span><span>+2k</span></div><div><div className="trust-stars">★★★★★</div><small>Growing with Rwanda's farm community</small></div></div></div><span className="auth-visual-foot"><MapPin size={14} /> Kigali, Rwanda · Growing together</span></div>
+    <div className="auth-content"><div className="auth-form-wrap"><Link className="auth-back" to="/"><ArrowLeft size={15} /> Back to K&amp;M</Link><span className="auth-mobile-logo"><span className="brand-mark"><Sprout size={21} /></span>K&amp;M</span><span className="eyebrow">{signingUp ? "JOIN OUR COMMUNITY" : "YOUR FARM-TO-MARKET COMMUNITY"}</span><h2>{signingUp ? "Create your account" : "Welcome back"}</h2><p className="auth-lead">{signingUp ? "One account opens the door to better connections." : "Sign in to your K&M workspace to pick up where you left off."}</p>
+      {error && <div className="auth-error" role="alert">{error}</div>}
+      <form className="auth-form" onSubmit={submit}>
+        {signingUp && <label>Full name<input autoComplete="name" required minLength={2} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Aline Uwase" /></label>}
+        <label>Email address<input autoComplete="email" type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+        <label>Password<input autoComplete={signingUp ? "new-password" : "current-password"} type="password" required minLength={signingUp ? 10 : 1} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={signingUp ? "At least 10 characters, with a number" : "Enter your password"} />{signingUp && <small className="password-hint">Use at least 10 characters, including a letter and a number.</small>}</label>
+        {signingUp && <label>Account type<select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="farmer">Poultry farmer or seller</option><option value="buyer">Buyer or customer</option><option value="delivery">Delivery agent</option></select></label>}
+        {!signingUp && <button className="forgot-link" type="button" onClick={() => notify("For account recovery, contact the K&M administrator.")}>Forgot password?</button>}
+        <button className="button button-primary auth-submit" disabled={busy}>{busy ? "Please wait…" : signingUp ? "Create account" : "Sign in"} {!busy && <ArrowRight size={16} />}</button>
+      </form>
+      {!signingUp && import.meta.env.DEV && <div className="demo-signin"><div className="auth-divider"><span>OR TRY A SAMPLE ACCOUNT</span></div><div className="demo-account-list">{demoAccounts.map((account) => <button key={account.role} onClick={() => { setEmail(account.email); setPassword("demo123"); setError(""); }}><span className={`demo-role-icon ${account.role}`}>{account.label[0]}</span><span><strong>{account.label}</strong><small>{account.email}</small></span><ArrowRight size={14} /></button>)}</div><p className="demo-hint">Development demos only · password: <strong>demo123</strong></p></div>}
+      <p className="auth-switch">{signingUp ? "Already have an account?" : "New to K&M?"} <button onClick={() => navigate(signingUp ? "/signin" : "/signup")}>{signingUp ? "Sign in" : "Create an account"}</button></p>
+      <p className="auth-security"><ShieldCheck size={14} /> Your sign-in is protected by a secure server session.</p>
+    </div></div>
+  </div>;
+}
+
+function PublicHeader({ user, signOut, cartCount, mobileNav, setMobileNav }: { user: AuthUser | null; signOut: () => void; cartCount: number; mobileNav: boolean; setMobileNav: (open: boolean) => void }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const navigate = useNavigate();
   return (
@@ -99,10 +230,9 @@ function PublicHeader({ cartCount, mobileNav, setMobileNav }: { cartCount: numbe
         </nav>
         <div className="header-actions">
           <button className="icon-btn search-toggle" aria-label="Search" onClick={() => setSearchOpen(!searchOpen)}><Search size={19} /></button>
-          <Link className="header-icon" to="/buyer#wishlist" aria-label="Wishlist"><Heart size={19} /></Link>
+          <Link className="header-icon" to={user?.role === "buyer" ? "/buyer#wishlist" : "/signin"} aria-label="Wishlist"><Heart size={19} /></Link>
           <Link className="header-icon cart-link" to="/checkout" aria-label={`Cart, ${cartCount} items`}><ShoppingBag size={19} /><span className="count-badge">{cartCount}</span></Link>
-          <Link className="button button-outline header-login" to="/buyer">Sign in</Link>
-          <Link className="button button-primary header-join" to="/farmer">Join as farmer <ArrowRight size={15} /></Link>
+          {user ? <><Link className="button button-outline header-login" to={workspaceFor(user.role)}>{user.name.split(" ")[0]}'s workspace</Link><button className="button button-primary header-join" onClick={signOut}>Sign out</button></> : <><Link className="button button-outline header-login" to="/signin">Sign in</Link><Link className="button button-primary header-join" to="/signup?role=farmer">Join as farmer <ArrowRight size={15} /></Link></>}
           <button className="icon-btn mobile-menu-toggle" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle menu">{mobileNav ? <X size={21} /> : <Menu size={21} />}</button>
         </div>
       </div>
@@ -111,20 +241,21 @@ function PublicHeader({ cartCount, mobileNav, setMobileNav }: { cartCount: numbe
   );
 }
 
-function DashboardShell({ mobileNav, setMobileNav, profileMenu, setProfileMenu, cartCount, notify }: {
+function DashboardShell({ user, mobileNav, setMobileNav, profileMenu, setProfileMenu, cartCount, notify, signOut }: {
+  user: AuthUser;
   mobileNav: boolean; setMobileNav: (open: boolean) => void; profileMenu: boolean;
-  setProfileMenu: (open: boolean) => void; cartCount: number; notify: (text: string) => void;
+  setProfileMenu: (open: boolean) => void; cartCount: number; notify: (text: string) => void; signOut: () => void;
 }) {
   const location = useLocation();
-  const role = location.pathname.slice(1);
-  const identity = role === "farmer" ? ["AU", "Aline Uwase", "Farm owner"] : role === "admin" ? ["MI", "Mireille Ingabire", "Platform admin"] : role === "delivery" ? ["EN", "Eric Nshimiyimana", "Delivery partner"] : ["JC", "Jean Claude", "Buyer account"];
+  const role = user.role;
+  const identity = [user.name.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase(), user.name, role === "farmer" ? "Farm owner" : role === "admin" ? "Platform admin" : role === "delivery" ? "Delivery partner" : "Buyer account"];
   const nav: [string, string, typeof LayoutDashboard][] = role === "farmer"
     ? [["Overview", "/farmer", LayoutDashboard], ["Marketplace", "/marketplace", ShoppingBag], ["My products", "/marketplace", Package], ["Orders", "/farmer#orders", ClipboardList], ["Customers", "/farmer#orders", Users], ["Farm profile", "/farms/green-valley", Sprout]]
     : role === "buyer"
-      ? [["Overview", "/buyer", LayoutDashboard], ["Explore marketplace", "/marketplace", ShoppingBag], ["My orders", "/buyer#orders", ClipboardList], ["Wishlist", "/buyer#wishlist", Heart], ["Deliveries", "/delivery", Truck], ["Messages", "/buyer#messages", MessageCircle]]
+      ? [["Overview", "/buyer", LayoutDashboard], ["Explore marketplace", "/marketplace", ShoppingBag], ["My orders", "/buyer#orders", ClipboardList], ["Wishlist", "/buyer#wishlist", Heart], ["Deliveries", "/buyer#orders", Truck], ["Messages", "/buyer#messages", MessageCircle]]
       : role === "delivery"
         ? [["Overview", "/delivery", LayoutDashboard], ["My deliveries", "/delivery#assignments", Truck], ["Delivery history", "/delivery#history", ClipboardList], ["Earnings", "/delivery#earnings", Wallet], ["Messages", "/delivery#messages", MessageCircle]]
-        : [["Overview", "/admin", LayoutDashboard], ["Users", "/admin#users", Users], ["Farmers", "/admin#users", Sprout], ["Products", "/marketplace", Package], ["Orders", "/admin#orders", ClipboardList], ["Analytics", "/admin#analytics", ChartNoAxesCombined]];
+        : [["Overview", "/admin", LayoutDashboard], ["Users", "/users", Users], ["Farmers", "/users", Sprout], ["Products", "/marketplace", Package], ["Orders", "/admin#orders", ClipboardList], ["Analytics", "/admin#analytics", ChartNoAxesCombined]];
   return (
     <>
     <aside className={`dashboard-sidebar ${mobileNav ? "open" : ""}`}>
@@ -133,7 +264,7 @@ function DashboardShell({ mobileNav, setMobileNav, profileMenu, setProfileMenu, 
       <div className="sidebar-section-label">{role === "admin" ? "PLATFORM" : "WORKSPACE"}</div>
       <nav className="dashboard-nav">{nav.map(([label, href, Icon]) => {
         const IconComponent = Icon as typeof LayoutDashboard;
-        const current = location.pathname === href.split("#")[0] && (href === `/${role}` || !href.includes("#"));
+        const current = location.pathname === href.split("#")[0] && (href === `/${role}` || (href === "/users" && location.pathname === "/users") || !href.includes("#"));
         return <Link key={label as string} to={href as string} className={current ? "active" : ""} onClick={() => setMobileNav(false)}><IconComponent size={18} /><span>{label as string}</span>{label === "My deliveries" && <span className="nav-pill">4</span>}</Link>;
       })}</nav>
       <div className="sidebar-section-label business-label">BUSINESS TOOLS</div>
@@ -149,7 +280,7 @@ function DashboardShell({ mobileNav, setMobileNav, profileMenu, setProfileMenu, 
         <button className="sidebar-help" onClick={() => notify("Support is available every day, 8 AM – 6 PM")}><CircleHelp size={17} />Help & support</button>
         <div className="profile-wrap">
           <button className="sidebar-user" onClick={() => setProfileMenu(!profileMenu)}><span className="avatar">{identity[0]}</span><span>{identity[1]}<small>{identity[2]}</small></span><ChevronDown size={15} /></button>
-          {profileMenu && <div className="profile-dropdown"><Link to={`/${role}#profile`}>My profile</Link><Link to="/marketplace">Switch workspace</Link><button onClick={() => notify("This is a frontend-only demo workspace.")}>Sign out</button></div>}
+          {profileMenu && <div className="profile-dropdown"><Link to={`/${role}#profile`}>My profile</Link>{role === "admin" && <Link to="/users">Manage users</Link>}<button onClick={signOut}>Sign out</button></div>}
         </div>
       </div>
       <button className="sidebar-close" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={20} /></button>
@@ -198,12 +329,13 @@ function SectionHeading({ eyebrow, title, subtitle, link, linkText }: { eyebrow:
 
 type SharedProps = {
   cart: CartLine[]; cartCount: number; wishlist: string[];
+  user: AuthUser | null;
   addToCart: (product: Product, quantity?: number) => void;
   toggleWishlist: (id: string) => void; updateQuantity: (id: string, delta: number) => void;
   notify: (text: string) => void; setShowProductModal: (open: boolean) => void;
 };
 
-function ProductGrid({ items, ...props }: { items: Product[] } & SharedProps) {
+function ProductGrid({ items, ...props }: { items: Product[] } & Pick<SharedProps, "wishlist" | "toggleWishlist" | "addToCart">) {
   return <div className="product-grid">{items.map((product) => <ProductCard key={product.id} product={product} {...props} />)}</div>;
 }
 
@@ -269,31 +401,33 @@ function OrdersTable({ compact = false, notify, viewAllTo = "/buyer", buyerView 
   return <section className="dash-panel orders-panel" id="orders"><div className="dash-panel-heading"><div><h2>{compact ? "Recent orders" : "Your latest orders"}</h2><p>Stay up to date with your business</p></div><Link className="text-link" to={viewAllTo}>View all <ArrowRight size={14} /></Link></div><div className="responsive-table"><table><thead><tr><th>{buyerView ? "PRODUCT" : "ORDER"}</th>{!buyerView && <th>CUSTOMER</th>}<th>{buyerView ? "ORDER DATE" : "DATE"}</th><th>{buyerView ? "DELIVERY" : "STATUS"}</th><th>TOTAL</th>{!compact && <th />}</tr></thead><tbody>{orders.slice(0, compact ? 3 : 4).map((order) => <tr key={order.id}><td><div className="order-product">{image(order.image, order.product)}<span><strong>{order.product}</strong><small>{order.id} · {order.quantity}</small></span></div></td>{!buyerView && <td>{order.buyer}</td>}<td>{order.date}</td><td><span className={`status-pill ${order.status.toLowerCase().replace(" ", "-")}`}><i />{order.status}</span></td><td className="table-total">{fmt(order.total)}</td>{!compact && <td><button className="more-button" onClick={() => notify?.(`Order ${order.id}: ${order.status}`)}>···</button></td>}</tr>)}</tbody></table></div></section>;
 }
 
-function FarmerDashboard({ setShowProductModal, notify }: SharedProps) {
-  return <div className="dashboard-page"><DashboardHeading eyebrow="FARMER WORKSPACE" title="Good morning, Aline 👋" subtitle="Here's what's happening across Green Valley Farm today."><button className="button button-outline" onClick={() => notify("Your farm performance report is ready to preview")}><ChartNoAxesCombined size={16} /> Farm report</button><button className="button button-primary" onClick={() => setShowProductModal(true)}><Plus size={17} /> Add a product</button></DashboardHeading>
+function FarmerDashboard({ setShowProductModal, notify, user }: SharedProps) {
+  const firstName = user?.name.split(" ")[0] || "Farmer";
+  return <div className="dashboard-page"><DashboardHeading eyebrow="FARMER WORKSPACE" title={`Good morning, ${firstName} 👋`} subtitle="Here's what's happening across your farm today."><button className="button button-outline" onClick={() => notify("Your farm performance report is ready to preview")}><ChartNoAxesCombined size={16} /> Farm report</button><button className="button button-primary" onClick={() => setShowProductModal(true)}><Plus size={17} /> Add a product</button></DashboardHeading>
     <div className="dashboard-stats"><StatCard icon={Wallet} label="Total revenue" value="RWF 3.24M" delta="12.8%" color="mint" note="vs RWF 2.87M last month" /><StatCard icon={Package} label="Active products" value="12" delta="2 new" color="gold" note="Across 4 categories" /><StatCard icon={ClipboardList} label="Active orders" value="18" delta="6 new" color="blue" note="5 awaiting confirmation" /><StatCard icon={Users} label="Total customers" value="284" delta="16.4%" color="lilac" note="42 returning customers" /></div>
     <div className="dashboard-content-grid"><Suspense fallback={<ChartFallback />}><RevenueChart /></Suspense><section className="dash-panel quick-actions"><div className="dash-panel-heading"><div><h2>Quick actions</h2><p>Keep your farm moving forward</p></div><span className="quick-spark"><Zap size={16} /></span></div><button onClick={() => setShowProductModal(true)}><span className="quick-icon mint"><Plus size={17} /></span><span><strong>List a new product</strong><small>Reach more local buyers</small></span><ChevronRight size={16} /></button><button onClick={() => notify("Inventory overview opened")}><span className="quick-icon gold"><Boxes size={17} /></span><span><strong>Check your inventory</strong><small>Egg stock running low · 2 days</small></span><ChevronRight size={16} /></button><Link to="/farms/green-valley"><span className="quick-icon blue"><Sprout size={17} /></span><span><strong>View your farm profile</strong><small>Manage your farm details</small></span><ChevronRight size={16} /></Link><div className="tip-card"><Sparkles size={16} /><span><strong>Farm insight</strong><small>Your egg sales are up 18% this month. Great work!</small></span></div></section></div>
     <div className="dashboard-bottom-grid"><OrdersTable compact notify={notify} viewAllTo="/farmer#orders" /><section className="dash-panel inventory-panel"><div className="dash-panel-heading"><div><h2>Top products</h2><p>Performance this month</p></div><Link className="text-link" to="/marketplace">All products <ArrowRight size={14} /></Link></div>{products.slice(0, 3).map((product, index) => <div className="top-product-row" key={product.id}>{image(product.image, product.name)}<span><strong>{product.name}</strong><small>{[42, 34, 28][index]} sold this month</small></span><strong>{fmt(product.price)}</strong></div>)}</section></div>
   </div>;
 }
 
-function BuyerDashboard({ wishlist, toggleWishlist, addToCart, notify }: SharedProps) {
+function BuyerDashboard({ wishlist, toggleWishlist, addToCart, notify, user }: SharedProps) {
   const location = useLocation();
+  const firstName = user?.name.split(" ")[0] || "Buyer";
   const [activeTab, setActiveTab] = useState(location.hash === "#wishlist" ? "Wishlist" : location.hash === "#recommended" ? "Recommended" : "Recent orders");
-  return <div className="dashboard-page"><DashboardHeading eyebrow="BUYER WORKSPACE" title="Welcome back, Jean Claude 👋" subtitle="Here's a little look at your K&M activity."><Link to="/marketplace" className="button button-primary"><ShoppingBag size={16} /> Browse marketplace</Link></DashboardHeading>
+  return <div className="dashboard-page"><DashboardHeading eyebrow="BUYER WORKSPACE" title={`Welcome back, ${firstName} 👋`} subtitle="Here's a little look at your K&M activity."><Link to="/marketplace" className="button button-primary"><ShoppingBag size={16} /> Browse marketplace</Link></DashboardHeading>
     <div className="buyer-welcome-card"><div><span className="eyebrow eyebrow-light">YOUR POULTRYCONNECT</span><h2>Good food starts with<br /><em>good connections.</em></h2><p>You've supported 4 local farms this month. Keep growing your community.</p><Link to="/marketplace" className="button button-light">Find something fresh <ArrowRight size={15} /></Link></div><div className="buyer-welcome-art">{image(products[0].image, "Fresh eggs from local farms")}<div className="buyer-art-label"><span className="float-icon"><Heart size={17} /></span><span>Locally loved<small>Supporting 4 local farms</small></span></div></div></div>
     <div className="dashboard-stats buyer-stats"><StatCard icon={ShoppingBag} label="Total purchases" value="24" delta="4 this month" color="mint" note="From 8 local sellers" /><StatCard icon={Truck} label="In transit" value="2" delta="On the way" color="gold" note="Your orders are moving" /><StatCard icon={Heart} label="Saved items" value={String(wishlist.length)} delta="Wishlist" color="blue" note="Things you love" /><StatCard icon={Wallet} label="Total spent" value="RWF 482k" delta="This year" color="lilac" note="Supporting local farms" /></div>
     <div className="buyer-tabs">{["Recent orders", "Wishlist", "Recommended"].map((tab) => <button key={tab} className={activeTab === tab ? "active" : ""} onClick={() => { setActiveTab(tab); window.history.replaceState(null, "", tab === "Wishlist" ? "#wishlist" : tab === "Recommended" ? "#recommended" : "#orders"); }}>{tab}{tab === "Wishlist" && <span>{wishlist.length}</span>}</button>)}</div>
     {activeTab === "Recent orders" ? <div className="dashboard-content-grid"><OrdersTable buyerView /><section className="dash-panel order-tracker"><div className="dash-panel-heading"><div><h2>On its way</h2><p>Order PC-2047 · Umurage Hatchery</p></div><span className="tracker-icon"><Truck size={17} /></span></div><div className="tracker-map"><div className="map-path" /><span className="map-pin from"><Sprout size={15} /></span><span className="map-pin to"><MapPin size={15} /></span><span className="map-bike"><Bike size={21} /></span><span className="map-label label-from">Musanze</span><span className="map-label label-to">Kigali</span></div><div className="tracking-progress"><span className="complete" /><span className="complete" /><span /><span /></div><div className="tracking-labels"><span>Confirmed</span><span>In transit</span><span>Nearby</span><span>Delivered</span></div><div className="delivery-estimate"><span><strong>Arriving today</strong><small>Estimated delivery · 2:30 – 3:00 PM</small></span><button onClick={() => notify("Your driver is about 18 km away")}>Track order <ArrowRight size={14} /></button></div></section></div>
-      : activeTab === "Wishlist" ? (wishlist.length ? <ProductGrid items={products.filter((item) => wishlist.includes(item.id))} wishlist={wishlist} toggleWishlist={toggleWishlist} addToCart={addToCart} cart={[]} cartCount={0} updateQuantity={() => {}} notify={notify} setShowProductModal={() => {}} /> : <div className="empty-state"><Heart size={30} /><h3>Your wishlist is ready for inspiration</h3><p>Tap the heart on anything you love while browsing.</p><Link className="button button-primary" to="/marketplace">Explore products</Link></div>)
-        : <ProductGrid items={products.slice(2, 6)} wishlist={wishlist} toggleWishlist={toggleWishlist} addToCart={addToCart} cart={[]} cartCount={0} updateQuantity={() => {}} notify={notify} setShowProductModal={() => {}} />}
+      : activeTab === "Wishlist" ? (wishlist.length ? <ProductGrid items={products.filter((item) => wishlist.includes(item.id))} wishlist={wishlist} toggleWishlist={toggleWishlist} addToCart={addToCart} /> : <div className="empty-state"><Heart size={30} /><h3>Your wishlist is ready for inspiration</h3><p>Tap the heart on anything you love while browsing.</p><Link className="button button-primary" to="/marketplace">Explore products</Link></div>)
+        : <ProductGrid items={products.slice(2, 6)} wishlist={wishlist} toggleWishlist={toggleWishlist} addToCart={addToCart} />}
   </div>;
 }
 
-function DeliveryPage({ notify }: SharedProps) {
+function DeliveryPage({ notify, user }: SharedProps) {
   const [tab, setTab] = useState("Active deliveries");
   const [deliveryStatus, setDeliveryStatus] = useState("On the way");
-  return <div className="dashboard-page"><DashboardHeading eyebrow="DELIVERY WORKSPACE" title="Every delivery brings us closer." subtitle="Good morning, Eric. You're making a difference, one doorstep at a time."><button className="button button-outline" onClick={() => notify("Map view toggled") }><MapPin size={16} /> Open route map</button></DashboardHeading>
+  return <div className="dashboard-page"><DashboardHeading eyebrow="DELIVERY WORKSPACE" title="Every delivery brings us closer." subtitle={`Good morning, ${user?.name.split(" ")[0] || "Eric"}. You're making a difference, one doorstep at a time.`}><button className="button button-outline" onClick={() => notify("Map view toggled") }><MapPin size={16} /> Open route map</button></DashboardHeading>
     <div className="dashboard-stats"><StatCard icon={Truck} label="Today's deliveries" value="8" delta="4 completed" color="mint" note="4 stops remaining" /><StatCard icon={Wallet} label="Today's earnings" value="RWF 32,500" delta="On track" color="gold" note="RWF 145k this week" /><StatCard icon={ChartNoAxesCombined} label="Completion rate" value="98.4%" delta="Top 5%" color="blue" note="Across 142 deliveries" /><StatCard icon={Star} label="Customer rating" value="4.9" delta="Excellent" color="lilac" note="From 87 customer reviews" /></div>
     <div className="delivery-map-card"><div className="delivery-map-art"><span className="map-road road-one" /><span className="map-road road-two" /><span className="map-road road-three" /><span className="map-town town-one">KACYIRU</span><span className="map-town town-two">KIMIHURURA</span><span className="map-town town-three">NYARUTARAMA</span><span className="delivery-map-pin pin-one"><Package size={16} /></span><span className="delivery-map-pin pin-two"><Bike size={18} /></span><span className="delivery-map-pin pin-three"><MapPin size={17} /></span><div className="map-status-float"><span className="live-dot" /> Live route preview<small>Kigali, Rwanda · 4 stops</small></div></div><div className="delivery-route-info"><span className="eyebrow">YOUR NEXT STOP</span><h2>Fresh farm eggs</h2><p>Jean Claude · Kacyiru, Kigali</p><div className="route-distance"><span><MapPin size={16} /><strong>2.4 km</strong><small>from your location</small></span><span><Truck size={16} /><strong>12 min</strong><small>estimated travel</small></span></div><div className="delivery-customer"><span className="avatar">JC</span><span><strong>Jean Claude</strong><small>+250 788 123 456</small></span><button onClick={() => notify("Calling customer is a visual demo only")}><MessageCircle size={16} /></button></div><button className="button button-primary delivery-update" onClick={() => { const next = deliveryStatus === "On the way" ? "Delivered" : "On the way"; setDeliveryStatus(next); notify(`Delivery marked ${next.toLowerCase()}`); }}>{deliveryStatus === "On the way" ? "Confirm delivery" : "Delivery completed"} <ArrowRight size={15} /></button></div></div>
     <div className="delivery-tabs">{["Active deliveries", "Completed today", "Delivery history"].map((label) => <button key={label} onClick={() => setTab(label)} className={tab === label ? "active" : ""}>{label}</button>)}</div>
@@ -337,19 +471,67 @@ function FarmProfile(props: SharedProps) {
   return <div className="farm-profile-page container"><div className="farm-cover">{image(farmCover, "Green Valley Farm landscape")}<div className="cover-gradient" /><button className="button button-glass cover-location"><MapPin size={15} /> Rulindo, Rwanda</button></div><div className="farm-profile-header"><div className="farm-profile-avatar">GV</div><div className="farm-profile-title"><div className="verified-line">VERIFIED FARM <BadgeCheck size={15} /></div><h1>Green Valley Farm</h1><p>Family-grown poultry, with care in every detail.</p><div className="farm-rating-line"><span>★★★★★</span> 4.9 <i /> <MapPin size={13} /> Rulindo, Northern Province <i /> <span>Member since 2021</span></div></div><button className="button button-primary" onClick={() => props.notify("Farmer messaging is a visual demo only")}><MessageCircle size={16} /> Contact farmer</button></div><div className="farm-profile-content"><div><div className="farm-about-card"><span className="eyebrow">A NOTE FROM THE FARM</span><h2>Growing good food, the thoughtful way.</h2><p>Welcome to Green Valley. We’re a family-run farm nestled in the hills of Rulindo, where we believe happy, healthy birds make a happier, healthier community. Everything we raise is nurtured with care and grown to be shared.</p><div className="farm-certifications"><span><ShieldCheck size={16} /> K&M verified</span><span><Leaf size={16} /> Family owned</span><span><MapPin size={16} /> Rulindo District</span></div></div><div className="farm-reviews"><SectionHeading eyebrow="KIND WORDS" title="What customers say" link="/farms/green-valley#reviews" linkText="Read all 48 reviews" />{[["“The eggs are so fresh, and I love knowing they come from a family farm.”","Jean Claude","★★★★★"],["“Great communication and wonderful quality every time.”","Chantal M.","★★★★★"]].map(([quote, name, stars]) => <article className="review-row" key={name}><div className="stars">{stars}</div><p>{quote}</p><small>{name} · Verified customer</small></article>)}</div></div><aside className="farm-side-card"><h3>Farm at a glance</h3><div><span><MapPin size={16} /> Location</span><strong>Rulindo, Northern Province</strong></div><div><span><Package size={16} /> Products</span><strong>12 active listings</strong></div><div><span><Star size={16} /> Rating</span><strong>4.9 / 5 · 48 reviews</strong></div><div><span><Truck size={16} /> Delivery</span><strong>Kigali & nearby districts</strong></div><button className="button button-outline" onClick={() => props.notify("Map preview is illustrative in this UI demo")}><MapPin size={15} /> View on map</button></aside></div><section className="farm-products"><SectionHeading eyebrow="FROM OUR FARM TO YOU" title="A little something from Green Valley" subtitle="Fresh picks, selected with care." /><ProductGrid items={[products[0], products[6], products[1], products[7]]} {...props} /></section></div>;
 }
 
-function AdminDashboard({ notify }: SharedProps) {
-  const [tab, setTab] = useState("Users");
+type ManagedUser = Pick<AuthUser, "id" | "name" | "email" | "role" | "verified" | "createdAt">;
+
+function AdminUsersPage({ notify }: { notify: (text: string) => void }) {
+  const [users, setUsers] = useState<ManagedUser[]>([]);
   const [query, setQuery] = useState("");
   const [pendingOnly, setPendingOnly] = useState(false);
-  const users = [
-    ["AU", "Aline Uwase", "Farmer", "Rulindo, Northern Province", "Verified", "Nov 04, 2024"],
-    ["JM", "Jean Claude", "Buyer", "Kigali, Rwanda", "Active", "Jan 12, 2025"],
-    ["EN", "Eric Nshimiyimana", "Delivery agent", "Kigali, Rwanda", "Verified", "Mar 21, 2025"],
-    ["UM", "Umurage Hatchery", "Farmer", "Kigali, Rwanda", "Review needed", "Nov 10, 2026"],
-  ];
-  const visibleUsers = users.filter((row) => row.join(" ").toLowerCase().includes(query.toLowerCase()) && (!pendingOnly || row[4] === "Review needed"));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const reload = async () => {
+    try {
+      const result = await authRequest<{ users: ManagedUser[] }>("/api/users");
+      setUsers(result.users);
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not load user accounts.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { void reload(); }, []);
+
+  const toggleVerification = async (account: ManagedUser) => {
+    try {
+      const result = await authRequest<{ user: ManagedUser }>(`/api/users/${encodeURIComponent(account.id)}/verification`, {
+        method: "PATCH",
+        body: JSON.stringify({ verified: !account.verified }),
+      });
+      setUsers((current) => current.map((item) => item.id === account.id ? result.user : item));
+      notify(`${account.name}'s account is ${result.user.verified ? "verified" : "pending review"}.`);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Could not update verification.";
+      setError(message);
+      notify(message);
+    }
+  };
+  const visible = users.filter((account) => {
+    const text = `${account.name} ${account.email} ${account.role}`.toLowerCase();
+    return text.includes(query.toLowerCase()) && (!pendingOnly || (["farmer", "delivery"].includes(account.role) && !account.verified));
+  });
+  const roleLabel = (role: UserRole) => ({ farmer: "Farmer", buyer: "Buyer", delivery: "Delivery agent", admin: "Administrator" })[role];
+
+  return <div className="dashboard-page"><DashboardHeading eyebrow="ACCOUNT MANAGEMENT" title="People make this marketplace." subtitle="Review registered accounts and manage farmer and delivery verification."><button className="button button-outline" onClick={() => void reload()}><ArrowUpRight size={15} /> Refresh accounts</button></DashboardHeading>
+    <section className="dash-panel admin-table-panel users-management"><div className="dash-panel-heading"><div><h2>Registered accounts <span className="user-total">{users.length}</span></h2><p>Account records stored securely by the K&amp;M server.</p></div><div className="admin-table-actions"><div className="small-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, email or role…" /></div><button className={`button button-outline button-compact ${pendingOnly ? "selected" : ""}`} onClick={() => setPendingOnly(!pendingOnly)} aria-pressed={pendingOnly}><Filter size={14} /> {pendingOnly ? "Pending only" : "Filter"}</button></div></div>
+      {error && <div className="auth-error" role="alert">{error}</div>}
+      {loading ? <div className="users-loading">Loading accounts…</div> : <div className="responsive-table"><table><thead><tr><th>ACCOUNT</th><th>ROLE</th><th>CREATED</th><th>VERIFICATION</th><th>ACTION</th></tr></thead><tbody>{visible.map((account) => <tr key={account.id}><td><div className="admin-user"><span className="avatar">{account.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><strong>{account.name}<small>{account.email}</small></strong></div></td><td>{roleLabel(account.role)}</td><td>{new Date(account.createdAt).toLocaleDateString()}</td><td><span className={`admin-status ${account.verified ? "" : "pending"}`}><i />{account.verified ? "Verified" : "Pending review"}</span></td><td>{["farmer", "delivery"].includes(account.role) ? <button className="button button-outline button-compact" onClick={() => void toggleVerification(account)}>{account.verified ? "Remove verification" : "Verify account"}</button> : <span className="account-no-action">—</span>}</td></tr>)}</tbody></table>{!visible.length && <div className="users-empty">No accounts match your search.</div>}</div>}
+    </section>
+  </div>;
+}
+
+function AdminDashboard({ notify, user }: SharedProps) {
+  const [tab, setTab] = useState("Users");
+  const [query, setQuery] = useState("");
   const visibleProducts = products.filter((product) => `${product.name} ${product.seller} ${product.category}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="dashboard-page"><DashboardHeading eyebrow="PLATFORM ADMIN" title="A clearer view of our community." subtitle="Good morning, Mireille. Here's how K&M is growing."><button className="button button-outline" onClick={() => notify("Platform report downloaded in demo mode")}><ArrowDownRight size={16} /> Export report</button></DashboardHeading><div className="dashboard-stats admin-stats">{farmStats.map((item, index) => <StatCard key={item.label} icon={[Sprout, ShoppingBag, Users, Wallet][index]} label={item.label} value={item.value} delta={item.change} color={item.color} note="compared to last month" />)}</div>  <div className="dashboard-content-grid"><Suspense fallback={<ChartFallback />}><RevenueChart title="Platform performance" subtitle="Gross marketplace value over the past six months" /></Suspense><section className="dash-panel admin-insights"><div className="dash-panel-heading"><div><h2>Platform health</h2><p>Your marketplace at a glance</p></div><span className="healthy-pill"><i /> Healthy</span></div><div className="health-stat"><span>Farmer verification</span><strong>94% <small>+2.4%</small></strong><div><i style={{ width: "94%" }} /></div></div><div className="health-stat"><span>Order completion</span><strong>97.8% <small>+1.6%</small></strong><div><i style={{ width: "97.8%" }} /></div></div><div className="health-stat"><span>Customer satisfaction</span><strong>4.8 / 5 <small>+0.2</small></strong><div><i style={{ width: "96%" }} /></div></div><div className="admin-note"><Sparkles size={16} /><span><strong>Growing steadily</strong><small>Marketplace activity is up 14% this month.</small></span></div></section></div><div className="admin-tabs">{["Users", "Products", "Orders"].map((label) => <button className={tab === label ? "active" : ""} key={label} onClick={() => { setTab(label); setPendingOnly(false); }}>{label}{label === "Users" && <span>1,284</span>}</button>)}</div><section className="dash-panel admin-table-panel"><div className="dash-panel-heading"><div><h2>{tab} management</h2><p>Monitor and manage the K&M community.</p></div><div className="admin-table-actions"><div className="small-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab.toLowerCase()}...`} /></div>{tab === "Users" && <button className={`button button-outline button-compact ${pendingOnly ? "selected" : ""}`} onClick={() => setPendingOnly(!pendingOnly)} aria-pressed={pendingOnly}><Filter size={14} /> {pendingOnly ? "Pending only" : "Filter"}</button>}</div></div>{tab === "Users" ? <div className="responsive-table"><table><thead><tr><th>ACCOUNT</th><th>ROLE</th><th>LOCATION</th><th>VERIFICATION</th><th>JOINED</th><th /></tr></thead><tbody>{visibleUsers.map((row) => <tr key={row[0]}><td><div className="admin-user"><span className="avatar">{row[0]}</span><strong>{row[1]}<small>{row[1].toLowerCase().replaceAll(" ", ".")}@example.rw</small></strong></div></td><td>{row[2]}</td><td>{row[3]}</td><td><span className={`admin-status ${row[4] === "Review needed" ? "pending" : ""}`}><i />{row[4]}</span></td><td>{row[5]}</td><td><button className="more-button" onClick={() => notify(`${row[1]} account details opened`)}>···</button></td></tr>)}</tbody></table></div> : tab === "Products" ? <div className="responsive-table"><table><thead><tr><th>PRODUCT</th><th>SELLER</th><th>CATEGORY</th><th>PRICE</th><th>STATUS</th><th /></tr></thead><tbody>{visibleProducts.slice(0, 5).map((product) => <tr key={product.id}><td><div className="order-product">{image(product.image, product.name)}<strong>{product.name}</strong></div></td><td>{product.seller}</td><td>{product.category}</td><td>{fmt(product.price)}</td><td><span className="admin-status"><i />Active</span></td><td><button className="more-button" onClick={() => notify(`${product.name} listing opened`)}>···</button></td></tr>)}</tbody></table></div> : <OrdersTable compact notify={notify} viewAllTo="/admin#orders" />}</section></div>;
+  const firstName = user?.name.split(" ")[0] || "Administrator";
+  return <div className="dashboard-page"><DashboardHeading eyebrow="PLATFORM ADMIN" title="A clearer view of our community." subtitle={`Good morning, ${firstName}. Here's how K&M is growing.`}><button className="button button-outline" onClick={() => notify("Platform report downloaded in demo mode")}><ArrowDownRight size={16} /> Export report</button></DashboardHeading><div className="dashboard-stats admin-stats">{farmStats.map((item, index) => <StatCard key={item.label} icon={[Sprout, ShoppingBag, Users, Wallet][index]} label={item.label} value={item.value} delta={item.change} color={item.color} note="compared to last month" />)}</div>
+    <div className="dashboard-content-grid"><Suspense fallback={<ChartFallback />}><RevenueChart title="Platform performance" subtitle="Gross marketplace value over the past six months" /></Suspense><section className="dash-panel admin-insights"><div className="dash-panel-heading"><div><h2>Platform health</h2><p>Your marketplace at a glance</p></div><span className="healthy-pill"><i /> Healthy</span></div><div className="health-stat"><span>Farmer verification</span><strong>94% <small>+2.4%</small></strong><div><i style={{ width: "94%" }} /></div></div><div className="health-stat"><span>Order completion</span><strong>97.8% <small>+1.6%</small></strong><div><i style={{ width: "97.8%" }} /></div></div><div className="health-stat"><span>Customer satisfaction</span><strong>4.8 / 5 <small>+0.2</small></strong><div><i style={{ width: "96%" }} /></div></div><div className="admin-note"><Sparkles size={16} /><span><strong>Growing steadily</strong><small>Marketplace activity is up 14% this month.</small></span></div></section></div>
+    <div className="admin-tabs">{["Users", "Products", "Orders"].map((label) => <button className={tab === label ? "active" : ""} key={label} onClick={() => { setTab(label); setQuery(""); }}>{label}</button>)}</div>
+    {tab === "Users" ? <section className="dash-panel admin-users-link"><span className="quick-icon mint"><Users size={20} /></span><div><h2>Manage real user accounts</h2><p>Review registered users, filter accounts, and update farmer or delivery verification.</p></div><Link className="button button-primary" to="/users">Open user management <ArrowRight size={15} /></Link></section>
+      : <section className="dash-panel admin-table-panel"><div className="dash-panel-heading"><div><h2>{tab} management</h2><p>Monitor the K&amp;M marketplace sample listings.</p></div><div className="admin-table-actions"><div className="small-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab.toLowerCase()}...`} /></div>{tab === "Users" && <Link className="button button-outline button-compact" to="/users">Manage users</Link>}</div></div>{tab === "Products" ? <div className="responsive-table"><table><thead><tr><th>PRODUCT</th><th>SELLER</th><th>CATEGORY</th><th>PRICE</th><th>STATUS</th></tr></thead><tbody>{visibleProducts.slice(0, 5).map((product) => <tr key={product.id}><td><div className="order-product">{image(product.image, product.name)}<strong>{product.name}</strong></div></td><td>{product.seller}</td><td>{product.category}</td><td>{fmt(product.price)}</td><td><span className="admin-status"><i />Active sample</span></td></tr>)}</tbody></table></div> : <OrdersTable compact notify={notify} viewAllTo="/admin#orders" />}</section>}
+  </div>;
 }
 
 function AddProductModal({ close, notify }: { close: () => void; notify: (text: string) => void }) {
@@ -359,8 +541,8 @@ function AddProductModal({ close, notify }: { close: () => void; notify: (text: 
 
 function MobileBottomNav() {
   const location = useLocation();
-  if (!["/farmer", "/buyer", "/delivery", "/admin"].includes(location.pathname)) return null;
-  const role = location.pathname.slice(1);
+  if (!["/farmer", "/buyer", "/delivery", "/admin", "/users"].includes(location.pathname)) return null;
+  const role = location.pathname === "/users" ? "admin" : location.pathname.slice(1);
   const links = role === "farmer" ? [["Overview", "/farmer", Home], ["Orders", "/farmer#orders", ClipboardList], ["Products", "/marketplace", Package], ["Farm", "/farms/green-valley", Sprout]]
     : role === "delivery" ? [["Overview", "/delivery", Home], ["Routes", "/delivery#assignments", MapPin], ["History", "/delivery#history", ClipboardList], ["Earnings", "/delivery#earnings", Wallet]]
       : role === "admin" ? [["Overview", "/admin", Home], ["Users", "/admin#users", Users], ["Orders", "/admin#orders", ClipboardList], ["Reports", "/admin#analytics", ChartNoAxesCombined]]
