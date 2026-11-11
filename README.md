@@ -1,6 +1,6 @@
-# PoultryConnect UI
+# K&M UI
 
-A responsive poultry marketplace and farm-business dashboard built with React, TypeScript, Vite, Tailwind CSS, Lucide React, React Router and Recharts.
+A responsive K&M poultry marketplace and farm-business dashboard built with React, TypeScript, Vite, Tailwind CSS, Lucide React, React Router and Recharts.
 
 ## Run locally
 

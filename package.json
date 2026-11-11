@@ -1,9 +1,9 @@
 {
-  "name": "poultryconnect",
+  "name": "k-and-m",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "PoultryConnect frontend marketplace and farm management demo",
+  "description": "K&M frontend poultry marketplace and farm management demo",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "start": "vite --host 0.0.0.0",
