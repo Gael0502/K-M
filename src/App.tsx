@@ -386,7 +386,46 @@ function HowItWorks() {
 }
 
 function Footer() {
-  return <footer className="footer"><div className="container"><div className="footer-main"><div className="footer-brand"><Link to="/" className="brand"><span className="brand-mark"><Sprout size={22} /></span><span>K<span>&amp;M</span><small>FARM · MARKET · GROW</small></span></Link><p>Bringing Rwanda's poultry community closer, one connection at a time.</p><div className="social-dots"><a href="#social" aria-label="Instagram">ig</a><a href="#social" aria-label="Facebook">f</a><a href="#social" aria-label="LinkedIn">in</a></div></div>{[["Explore", ["Marketplace", "Categories", "Featured farms", "How it works"]], ["For your business", ["Sell on K&M", "Farm management", "Delivery partners", "Buyer protection"]], ["We're here", ["Help center", "Contact us", "Our story", "Privacy & terms"]]].map(([heading, items]) => <div className="footer-links" key={heading as string}><strong>{heading as string}</strong>{(items as string[]).map((item) => <Link key={item} to={item === "Sell on K&M" ? "/farmer" : "/marketplace"}>{item}</Link>)}</div>)}</div><div className="footer-bottom"><span>© 2026 K&M. Growing together in Rwanda.</span><span><MapPin size={13} /> Kigali, Rwanda</span><span>Made with care <Heart size={13} fill="currentColor" /></span></div></div></footer>;
+  return (
+    <footer className="footer">
+      <div className="container">
+        <div className="footer-main">
+          <div className="footer-brand">
+            <Link to="/" className="brand"><span className="brand-mark"><Sprout size={22} /></span><span>K<span>&amp;M</span><small>FARM · MARKET · GROW</small></span></Link>
+            <p>Bringing Rwanda's poultry community closer, one connection at a time.</p>
+            <div className="social-dots"><a href="#social" aria-label="Instagram">ig</a><a href="#social" aria-label="Facebook">f</a><a href="#social" aria-label="LinkedIn">in</a></div>
+          </div>
+          {[["Explore", ["Marketplace", "Categories", "Featured farms", "How it works"]], ["For your business", ["Sell on K&M", "Farm management", "Delivery partners", "Buyer protection"]], ["We're here", ["Help center", "Contact us", "Our story", "Privacy & terms"]]].map(([heading, items]) => (
+            <div className="footer-links" key={heading as string}>
+              <strong>{heading as string}</strong>
+              {(items as string[]).map((item) => <Link key={item} to={item === "Sell on K&M" ? "/farmer" : item === "Our story" ? "/#our-story" : "/marketplace"}>{item}</Link>)}
+            </div>
+          ))}
+        </div>
+        <section className="footer-story" id="our-story" aria-labelledby="footer-story-title">
+          <div className="footer-story-copy">
+            <span className="footer-story-kicker">WHY K&amp;M</span>
+            <h2 id="footer-story-title">Good things grow when we grow together.</h2>
+            <p>K&amp;M was created around a simple idea: poultry farmers deserve a clearer path to customers, and buyers deserve an easier way to find the people behind their food. By bringing them together, we can help local businesses build trust, reach new markets, and grow with confidence.</p>
+          </div>
+          <div className="footer-founders">
+            <span className="footer-story-kicker">THE FOUNDERS</span>
+            <p>Kelly and Moses share a belief in the potential of Rwanda's poultry community. They started K&amp;M to make meaningful connections between farms and the people and businesses they serve—one relationship, one order, and one growing opportunity at a time.</p>
+            <div className="founder-names">
+              <span><img src="/founders/kelly.jpg" alt="Kelly, K&M Business Director" /><strong>Kelly<small>Business Director</small></strong></span>
+              <span><img src="/founders/moses.png" alt="Moses, K&M CEO" /><strong>Moses<small>CEO</small></strong></span>
+            </div>
+          </div>
+        </section>
+        <div className="footer-bottom">
+          <span>© 2026 K&amp;M. Growing together in Rwanda.</span>
+          <span><MapPin size={13} /> Kigali, Rwanda</span>
+          <span>Made with care <Heart size={13} fill="currentColor" /></span>
+        </div>
+        <p className="footer-image-credit">Day-old chick photo by <a href="https://commons.wikimedia.org/wiki/File:1_day_old_chick_hatchling.jpg" target="_blank" rel="noreferrer">Uberprutser / Wikimedia Commons</a>, licensed under <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noreferrer">CC BY-SA 3.0</a>.</p>
+      </div>
+    </footer>
+  );
 }
 
 function DashboardHeading({ eyebrow, title, subtitle, children }: { eyebrow: string; title: string; subtitle: string; children?: ReactNode }) {
